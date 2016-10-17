@@ -5,18 +5,20 @@
  */
 
 /*
- * Copyright (c) 2014, Joyent, Inc.
+ * Copyright (c) 2016, Joyent, Inc.
  */
 
 /*
  * Main entry-point for the VMs API.
  */
 
-var path = require('path');
+var bunyan = require('bunyan');
 var fs = require('fs');
+var path = require('path');
+var tritonTracer = require('triton-tracer');
 
-var VMAPI = require('./lib/vmapi');
 var configLoader = require('./lib/config-loader');
+var VMAPI = require('./lib/vmapi');
 
 var VERSION = false;
 
@@ -44,8 +46,17 @@ config.version = version() || '7.0.0';
 var vmapi;
 
 try {
-    vmapi = new VMAPI(config);
-    vmapi.init();
+    tritonTracer.init({
+        /// create this more generically and pass in to constructor/config?
+        log: new bunyan({
+            name: 'vmapi',
+            level: 'debug'
+        })
+    }, function (/* session */) {
+        // session.set('sessionState', ['server.js:53']);
+        vmapi = new VMAPI(config);
+        vmapi.init();
+    });
 } catch (e) {
     console.error('Error produced when initializing VMAPI services');
     console.error(e.message);
