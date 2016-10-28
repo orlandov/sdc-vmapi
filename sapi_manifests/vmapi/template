@@ -54,6 +54,26 @@
     "papi": {
         "url": "http://{{{PAPI_SERVICE}}}"
     },
+    "cueballHttpAgent": {
+        "resolvers": ["{{{BINDER_SERVICE}}}"],
+        "initialDomains": [
+            "{{{CNAPI_SERVICE}}}",
+            "{{{IMGAPI_SERVICE}}}",
+            "{{{NAPI_SERVICE}}}",
+            "{{{PAPI_SERVICE}}}"
+        ],
+        "spares": 2,
+        "maximum": 20,
+        "recovery": {
+            "default": {
+                "timeout": 2000,
+                "maxTimeout": 8000,
+                "retries": 5,
+                "delay": 250,
+                "maxDelay": 1000
+            }
+        }
+    },
     "moray": {
         "host": "{{{MORAY_SERVICE}}}",
         "port": 2020,
