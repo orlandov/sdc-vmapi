@@ -17,7 +17,7 @@
     "nodeunit": "0.9.1",
     "once": "^1.3.3",
     "restify": "4.2.0",
-    "restify-clients": "git+https://github.com/joshwilsdon/restify-clients.git#rfd-35-clshack",
+    "restify-clients": "git+https://github.com/joshwilsdon/restify-clients.git#rfd-35-cls",
     "sdc-clients": "git+https://github.com/joyent/node-sdc-clients.git#rfd-35-cls",
     "sigyan": "0.2.0",
     "sprintf": "0.1.1",
