@@ -1,4 +1,7 @@
 {
+    "binder": {
+        "domain": "{{{BINDER_SERVICE}}}"
+    },
     "logLevel": "debug",
     "maxSockets": 100,
     "useVmAgent": true,
