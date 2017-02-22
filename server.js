@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright (c) 2014, Joyent, Inc.
+ * Copyright (c) 2017, Joyent, Inc.
  */
 
 /*
@@ -21,6 +21,7 @@ var Logger = require('bunyan');
 var path = require('path');
 var restify = require('restify');
 var sigyan = require('sigyan');
+var tritonTracer = require('triton-tracer');
 var vasync = require('vasync');
 
 var CNAPI = require('./lib/apis/cnapi');
@@ -109,6 +110,20 @@ function startVmapiService() {
         name: 'vmapi',
         level: config.logLevel,
         serializers: restify.bunyan.serializers
+    });
+
+    // Init tracing now that we have a logger
+    tritonTracer.init({
+        log: vmapiLog,
+        sampling: {
+            route: {
+                changefeeds: 0.1,
+                changefeeds_stats: 0.1,
+                ping: 0.1
+            }, GET: {
+                '/ping': 0.1
+            }
+        }
     });
 
     // Increase/decrease loggers levels using SIGUSR2/SIGUSR1:
