@@ -13,6 +13,7 @@
  */
 
 var assert = require('assert-plus');
+var changefeed = require('changefeed');
 var fs = require('fs');
 var http = require('http');
 var https = require('https');
@@ -102,9 +103,13 @@ function createApiClients(config, parentLog) {
 }
 
 function startVmapiService() {
+    var apiClients;
+    var changefeedPublisher;
     var configFilePath = path.join(__dirname, 'config.json');
     var config = configLoader.loadConfig(configFilePath);
     config.version = version() || '7.0.0';
+
+    var morayApi;
 
     var vmapiLog = new Logger({
         name: 'vmapi',
@@ -132,16 +137,29 @@ function startVmapiService() {
     http.globalAgent.maxSockets = config.maxSockets || 100;
     https.globalAgent.maxSockets = config.maxSockets || 100;
 
-    var changefeedOptions = jsprim.deepCopy(config.changefeed);
-    changefeedOptions.log =
-        vmapiLog.child({ component: 'changefeed' }, true);
-
-    var morayApi = new MORAY(config.moray);
-
-    var apiClients = createApiClients(config, vmapiLog);
+    apiClients = createApiClients(config, vmapiLog);
 
     vasync.parallel({funcs: [
-        function connectToMoray(done) {
+        function initChangefeedPublisher(done) {
+            var changefeedOptions = jsprim.deepCopy(config.changefeed);
+            changefeedOptions.log = vmapiLog.child({ component: 'changefeed' },
+                true);
+
+            changefeedPublisher =
+                changefeed.createPublisher(changefeedOptions);
+
+            changefeedPublisher.on('moray-ready', function onMorayReady() {
+                changefeedPublisher.start();
+                done();
+            });
+        },
+        function initMorayApi(done) {
+            assert.object(changefeedPublisher, 'changefeedPublisher');
+
+            var morayConfig = jsprim.deepCopy(config.moray);
+            morayConfig.changefeedPublisher = changefeedPublisher;
+
+            morayApi = new MORAY(morayConfig);
             morayApi.connect();
 
             morayApi.on('moray-ready', function onMorayReady() {
@@ -174,14 +192,12 @@ function startVmapiService() {
                 },
                 apiClients: apiClients,
                 moray: morayApi,
-                changefeed: changefeedOptions,
+                changefeedPublisher: changefeedPublisher,
                 overlay: config.overlay,
                 reserveKvmStorage: config.reserveKvmStorage
             });
 
-            vmapiService.init(function onVmapiInitialized() {
-                vmapiService.listen();
-            });
+            vmapiService.listen();
         }
     });
 }
