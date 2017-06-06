@@ -64,6 +64,27 @@
             "resolvers": ["{{{BINDER_SERVICE}}}"]
         }
     },
+    "cueballHttpAgent": {
+        "resolvers": ["{{{BINDER_SERVICE}}}"],
+        "initialDomains": [
+            "{{{cnapi_domain}}}",
+            "{{{napi_domain}}}",
+            "{{{wfapi_domain}}}",
+            "{{{imgapi_domain}}}",
+            "{{{papi_domain}}}"
+        ],
+        "spares": 4,
+        "maximum": 100,
+        "recovery": {
+            "default": {
+                "timeout": 2000,
+                "maxTimeout": 8000,
+                "retries": 5,
+                "delay": 250,
+                "maxDelay": 1000
+            }
+        }
+    },
     "changefeed": {
         "resources": [
             {
@@ -84,12 +105,9 @@
         ],
         "moray": {
             "bucketName": "vmapi_changefeed",
-            "host": "{{{MORAY_SERVICE}}}",
-            "port": 2020,
-            "connectTimeout": 200,
-            "retry": {
-                "retries": 2,
-                "minTimeout": 500
+            "srvDomain": "{{MORAY_SERVICE}}",
+            "cueballOptions": {
+                "resolvers": ["{{{BINDER_SERVICE}}}"]
             }
         },
         "maxAge": 120
