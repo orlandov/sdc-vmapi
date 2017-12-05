@@ -10,7 +10,7 @@ markdown2extras: tables, code-friendly
 -->
 
 <!--
-    Copyright (c) 2015, Joyent, Inc.
+    Copyright (c) 2017, Joyent, Inc.
 -->
 
 # Introduction to VMs API
@@ -90,6 +90,7 @@ update time.
 | zfs_data_compression     | String                        | Specifies a compression algorithm used for the VM's data dataset                                                                                                                                                          | No                  | Yes    | Yes    |
 | zfs_io_priority          | Number                        | ZFS IO Priority                                                                                                                                                                                                           | Yes                 | Yes    | Yes    |
 | zlog_max_size            | Number                        | Sets the maximum size of the stdio.log file for a docker zone before rotation. NOTE: To be used by sdc-docker only.                                                                                                       | No                  | Yes    | Yes    |
+
 Furthermore, when dealing with KVM VMs there are additional attributes to know
 about and are specific to KVM being a different type of virtualization: cpu_type,
 disks, disk_driver, nic_driver and vcpus. KVM VMs require at least
@@ -362,30 +363,75 @@ Error responses will be returned when the response status code is one of 40X err
 
 # Ping VMAPI
 
-Use ping when you want a general status report from VMAPI. VMAPI makes HTTP connections to REST APIs and TCP connections to services like moray. The **ping**  endpoint provides a compact response object that lets clients know what is VMAPI's point of view of the backend services it is connected to. The following is the format of the ping response object. The pingErrors attribute is an object where each of its keys is the name of an API (wfapi, moray, cnapi or napi) and the value of each key is the error response that was obtained after pinging the correspondent service.
+Use ping when you want a general status report from VMAPI. VMAPI makes HTTP
+connections to REST APIs and TCP connections to services like moray. The
+**ping**  endpoint provides a compact response object that lets clients know
+what is VMAPI's point of view of the backend services it is connected to. The
+following is the format of the ping response object.
 
 ## Ping (GET /ping)
 
     GET /ping
 
     {
+      "pingErrors": {},
       "pid": 12456,
       "status": "OK",
       "healthy": true,
       "services": {
         "wfapi": "online",
-        "moray": "online",
-        "cnapi": "online",
-        "napi": "online"
+        "moray": "online"
+      }
+      "initialization": {
+          "moray": {
+            "status": "BUCKETS_REINDEX_DONE",
+            "error": "latest error encountered during moray buckets initialization"
+          }
+        }
       },
-      "pingErrors": {}
+      "dataMigrations": {
+        "latestCompletedMigrations": {
+          "vms": 1
+        },
+        "latestErrors": {
+          "vms": "Error: error encountered during data migrations"
+        }
+      }
     }
+
+The **pingErrors** attribute is an object where each of its keys is the name of
+an API (wfapi, moray, cnapi or napi) and the value of each key is the error
+response that was obtained after pinging the correspondent service.
 
 Of special note is the **status** attribute that lets us know if VMAPI is fully
 functional in terms of data and services initialized. A "healthy: true" value
 from the ping response means that VMAPI has not had HTTP or backend
 initialization errors.
 
+The `initialization.moray.status` property can have the following values:
+
+* `NOT_STARTED`: the moray buckets initialization process hasn't started yet.
+* `STARTED`: the moray buckets initialization process has started, but all
+  buckets haven't been completely setup (created and updated to the current
+  schemas) yet.
+* `BUCKETS_SETUP_DONE`: the moray buckets have all been created and/or updated
+  to their current schema.
+* `BUCKETS_REINDEX_DONE`: the moray buckets have all been created and/or updated
+  to their current schema, and all their rows have been reindexed.
+* `FAILED`: the moray buckets initialization has failed with a non transient
+  error.
+
+The `dataMigrations` property is composed of two sub-properties:
+
+1. `latestCompletedMigrations`: an object that has properties whose names
+   identify data models (`vms`, `server_vms`, `vm_role_tags`) and whose values
+   indicate the sequence number of the latest migrations that completed
+   successfully for that model.
+
+2. `latestErrors`: an object structured similarly to
+   `latestCompletedMigrations`, but instead of values identifiying the latest
+   migration that completed successfully, they represent the latest error that
+   occured when migration the data for the corresponding data model.
 
 # VMs
 
@@ -402,22 +448,23 @@ will result in a request error.
 
 | Param            | Type                                             | Description                                     |
 | ---------------- | ------------------------------------------------ | ----------------------------------------------- |
-| uuid             | UUID                                             | VM uuid                                         |
-| owner_uuid       | UUID                                             | VM Owner                                        |
-| server_uuid      | UUID                                             | Server where the VM lives                       |
-| image_uuid       | UUID                                             | Image of the VM                                 |
+| alias            | String                                           | VM Alias|
 | billing_id       | UUID                                             | UUID of the package the VM was created with     |
 | brand            | String                                           | Brand of the VM (joyent, joyent-minimal or kvm) |
-| docker           | Boolean                                          | true if the VM is a docker VM, false otherwise  |
-| alias            | String                                           | VM Alias                                        |
-| state            | String                                           | running, stopped, active or destroyed           |
-| ram              | Number                                           | Amount of memory of the VM                      |
-| uuids            | String (comma-separated UUID values)             | List of VM UUIDs to match                       |
 | create_timestamp | Unix Time in milliseconds or UTC ISO Date String | VM creation timestamp                           |
+| docker           | Boolean                                          | true if the VM is a docker VM, false otherwise  |
+| fields           | String (comma-separated values)                  | Specify which VM fields to return, see below    |
+| image_uuid       | UUID                                             | Image of the VM                                 |
+| internal_metadata| String                                           | VM internal metadata, [see below](#internal-metadata)
+| owner_uuid       | UUID                                             | VM Owner                                        |
 | package_name     | String                                           | DEPRECATED: use billing_id                      |
 | package_version  | String                                           | DEPRECATED: use billing_id                      |
+| uuid             | UUID                                             | VM uuid                                         |
+| ram              | Number                                           | Amount of memory of the VM                      |
+| server_uuid      | UUID                                             | Server where the VM lives                       |
+| state            | String                                           | running, stopped, active or destroyed           |
+| uuids            | String (comma-separated UUID values)             | List of VM UUIDs to match                       |
 | tag.key          | String                                           | VM tags, see below                              |
-| fields           | String (comma-separated values)                  | Specify which VM fields to return, see below    |
 
 ### Specifying VM Fields to Return
 
@@ -651,6 +698,22 @@ result in a request error.
 ### Tags
 
 VMs can also be searched by tags. Tags are key/value pairs that let us identify a vm by client-specific criteria. If a VM is tagged as 'role=master', then the search filter to be added to the request params should be 'tag.role=master'. When a tag value is '*', the search is performed for VMs that are tagged with any value of the specified key. Any number of tags can be specified. See the examples section for sample searches of VMs by tags.
+
+### Internal metadata
+
+VMs can be searched by internal metadata. Internal metadata is an object with
+keys and values that are always strings. There are no nested objects/properties.
+Pattern matching is not available, so matching needs to be exact.
+
+For example, to search for VMs with a `docker:logdriver` internal metadata key
+with a value of `"json-file"`, one can send the following query:
+
+```
+GET /vms?internal_metadata.docker:logdriver=json-file
+```
+
+There is one limitation to keep in mind: matching a string in a given internal
+metadata key that is larger than 100 characters is not supported.
 
 ### ListVms Responses
 
@@ -1399,8 +1462,11 @@ has succeeded.
 
 ## DeleteVm (DELETE /vms/:uuid)
 
-Deletes a VM. The VM will be physically destroyed and it will be marked as destroyed
-in the cache database.
+Deletes a VM. If the VM exists and has a `server_uuid` that refers to an actual
+CN that is available, the VM will be physically destroyed and it will be marked
+as destroyed in the cache database.
+
+If the VM doesn't have a `server_uuid`, the request will result in an error.
 
 ### Inputs
 
@@ -1418,11 +1484,29 @@ in the cache database.
 | 404  | VM Not Found. VM does not exist or VM does not belong to the specified owner | Error object       |
 | 409  | VM not allocated to a server yet                                             | Error object       |
 
+On a successful response, a [VM Job Response Object](#vm-job-response-object) is
+returned in the response body.
 
 ### Example
 
     DELETE /vms/e9bd0ed1-7de3-4c66-a649-d675dbce6e83
 
+    HTTP/1.1 202 Accepted
+    Connection: close
+    workflow-api: http://workflow.coal.joyent.us
+    Content-Type: application/json
+    Content-Length: 100
+    Content-MD5: as77tkERx4gj7igpE83PyQ==
+    Date: Mon, 24 Apr 2017 22:30:44 GMT
+    Server: VMAPI
+    x-request-id: d169bbdf-a54c-4f71-a543-8928cda5b152
+    x-response-time: 170
+    x-server-name: d6334b70-2e19-4af4-85ba-53776ef82820
+
+    {
+      "vm_uuid": "e9bd0ed1-7de3-4c66-a649-d675dbce6e83",
+      "job_uuid": "56aca67a-5374-4117-9817-6ac77060697e"
+    }
 
 # VM Metadata
 
@@ -2113,7 +2197,6 @@ on VMAPI is updated as well.
 | moray.retry.minTimeout | Number           | -               | Moray minimum retry timeout                                    |
 | moray.retry.maxTimeout | Number           | -               | Moray maximum retry timeout                                    |
 | docker_tag_re          | String           | -               | Tags matching regex are treated with Docker tag semantics      |
-| triton_tag_re          | String           | -               | Tags matching regex are treated with Triton tag semantics      |
 
 
 ## SAPI Configuration
@@ -2130,15 +2213,12 @@ production.
 | ------------------------------ | ------ | ---------------------------------------------------------------------------- |
 | **experimental_fluentd_host**  | String |                                                                              |
 | **docker_tag_re**              | String | Tags matching regex are treated with Docker tag semantics                    |
-| **triton_tag_re**              | String | Tags matching regex are treated with Triton tag semantics                    |
 
-`docker_tag_re` and `triton_tag_re` must be valid regular expression strings --
-more concretely, what Javascript's RegExp() considers valid. Docker tags can be
-added during provisioning, but otherwise cannot later be altered or removed, and
-may have special significance to Docker. Triton tags may be used by various
-Triton services. It's recommende to not change either `docker_tag_re` or
-`triton_tag_re` unless you're aware of the semantics and effects of Docker and
-Triton tags.
+`docker_tag_re` must be a valid regular expression string -- more concretely,
+what Javascript's RegExp() considers valid. Docker tags can be added during
+provisioning, but otherwise cannot later be altered or removed, and may have
+special significance to Docker. It's recommended to not change `docker_tag_re`
+unless you're aware of the semantics and effects of Docker tags.
 
 
 ## Health

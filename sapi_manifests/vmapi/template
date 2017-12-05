@@ -10,9 +10,6 @@
 {{#experimental_fluentd_host}}
     "fluentd_host": "{{{experimental_fluentd_host}}}",
 {{/experimental_fluentd_host}}
-{{#triton_tag_re}}
-    "triton_tag_re": "{{triton_tag_re}}",
-{{/triton_tag_re}}
 {{#docker_tag_re}}
     "docker_tag_re": "{{docker_tag_re}}",
 {{/docker_tag_re}}
@@ -61,10 +58,34 @@
     "papi": {
         "url": "http://{{{PAPI_SERVICE}}}"
     },
+    "volapi": {
+        "url": "http://volapi.{{{datacenter_name}}}.{{{dns_domain}}}"
+    },
     "moray": {
         "srvDomain": "{{MORAY_SERVICE}}",
         "cueballOptions": {
             "resolvers": ["{{{BINDER_SERVICE}}}"]
+        }
+    },
+    "cueballHttpAgent": {
+        "resolvers": ["{{{BINDER_SERVICE}}}"],
+        "initialDomains": [
+            "{{{CNAPI_SERVICE}}}",
+            "{{{NAPI_SERVICE}}}",
+            "{{{WORKFLOW_SERVICE}}}",
+            "{{{IMGAPI_SERVICE}}}",
+            "{{{PAPI_SERVICE}}}"
+        ],
+        "spares": 4,
+        "maximum": 100,
+        "recovery": {
+            "default": {
+                "timeout": 2000,
+                "maxTimeout": 8000,
+                "retries": 5,
+                "delay": 250,
+                "maxDelay": 1000
+            }
         }
     },
     "changefeed": {

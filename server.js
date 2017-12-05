@@ -13,12 +13,13 @@
  */
 
 var assert = require('assert-plus');
+var bunyan = require('bunyan');
 var changefeed = require('changefeed');
+var cueball = require('cueball');
 var fs = require('fs');
 var http = require('http');
 var https = require('https');
 var jsprim = require('jsprim');
-var Logger = require('bunyan');
 var path = require('path');
 var restify = require('restify');
 var sigyan = require('sigyan');
@@ -27,13 +28,22 @@ var vasync = require('vasync');
 
 var CNAPI = require('./lib/apis/cnapi');
 var IMGAPI = require('./lib/apis/imgapi');
-var MORAY = require('./lib/apis/moray');
 var NAPI = require('./lib/apis/napi');
 var PAPI = require('./lib/apis/papi');
-var vmapi = require('./lib/vmapi');
+var VmapiApp = require('./lib/vmapi');
 var WFAPI = require('./lib/apis/wfapi');
 
 var configLoader = require('./lib/config-loader');
+var DataMigrationsController = require('./lib/data-migrations/controller');
+var dataMigrationsLoader = require('./lib/data-migrations/loader');
+var morayInit = require('./lib/moray/moray-init.js');
+
+var DATA_MIGRATIONS;
+var dataMigrationCtrl;
+var morayBucketsInitializer;
+var morayClient;
+var moray;
+
 var VERSION = false;
 
 /*
@@ -68,29 +78,39 @@ function createApiClients(config, parentLog) {
     assert.object(config, 'config');
     assert.object(parentLog, 'parentLog');
 
+    var agent;
+    if (config.cueballHttpAgent) {
+        agent = new cueball.HttpAgent(config.cueballHttpAgent);
+    }
+
     assert.object(config.cnapi, 'config.cnapi');
     var cnapiClientOpts = jsprim.deepCopy(config.cnapi);
     cnapiClientOpts.log = parentLog.child({ component: 'cnapi' }, true);
+    cnapiClientOpts.agent = agent;
     var cnapiClient = new CNAPI(cnapiClientOpts);
 
     assert.object(config.imgapi, 'config.imgapi');
     var imgapiClientOpts = jsprim.deepCopy(config.imgapi);
     imgapiClientOpts.log = parentLog.child({ component: 'imgapi' }, true);
+    imgapiClientOpts.agent = agent;
     var imgapiClient = new IMGAPI(imgapiClientOpts);
 
     assert.object(config.napi, 'config.napi');
     var napiClientOpts = jsprim.deepCopy(config.napi);
     napiClientOpts.log = parentLog.child({ component: 'napi' }, true);
+    napiClientOpts.agent = agent;
     var napiClient = new NAPI(napiClientOpts);
 
     assert.object(config.papi, 'config.papi');
     var papiClientOpts = jsprim.deepCopy(config.papi);
     papiClientOpts.log = parentLog.child({ component: 'papi' }, true);
+    papiClientOpts.agent = agent;
     var papiClient = new PAPI(papiClientOpts);
 
     assert.object(config.wfapi, 'config.wfapi');
     var wfapiClientOpts = jsprim.deepCopy(config.wfapi);
     wfapiClientOpts.log = parentLog.child({ component: 'wfapi' }, true);
+    wfapiClientOpts.agent = agent;
     var wfapiClient = new WFAPI(wfapiClientOpts);
 
     return {
@@ -107,11 +127,9 @@ function startVmapiService() {
     var changefeedPublisher;
     var configFilePath = path.join(__dirname, 'config.json');
     var config = configLoader.loadConfig(configFilePath);
-    config.version = version() || '7.0.0';
-
-    var morayApi;
-
-    var vmapiLog = new Logger({
+    var dataMigrations;
+    var dataMigrationsCtrl;
+    var vmapiLog = bunyan.createLogger({
         name: 'vmapi',
         level: config.logLevel,
         serializers: restify.bunyan.serializers
@@ -131,16 +149,18 @@ function startVmapiService() {
         }
     });
 
+    config.version = version() || '7.0.0';
+
     // Increase/decrease loggers levels using SIGUSR2/SIGUSR1:
-    sigyan.add([vmapi.log]);
+    sigyan.add([vmapiLog]);
 
     http.globalAgent.maxSockets = config.maxSockets || 100;
     https.globalAgent.maxSockets = config.maxSockets || 100;
 
     apiClients = createApiClients(config, vmapiLog);
 
-    vasync.parallel({funcs: [
-        function initChangefeedPublisher(done) {
+    vasync.pipeline({funcs: [
+        function initChangefeedPublisher(_, next) {
             var changefeedOptions = jsprim.deepCopy(config.changefeed);
             changefeedOptions.log = vmapiLog.child({ component: 'changefeed' },
                 true);
@@ -150,23 +170,86 @@ function startVmapiService() {
 
             changefeedPublisher.on('moray-ready', function onMorayReady() {
                 changefeedPublisher.start();
-                done();
+                next();
             });
         },
-        function initMorayApi(done) {
+        function loadDataMigrations(_, next) {
+            vmapiLog.info('Loading data migrations modules');
+
+            dataMigrationsLoader.loadMigrations({
+                log: vmapiLog.child({ component: 'migrations-loader' }, true)
+            }, function onMigrationsLoaded(migrationsLoadErr, migrations) {
+                if (migrationsLoadErr) {
+                    vmapiLog.error({err: migrationsLoadErr},
+                            'Error when loading data migrations modules');
+                } else {
+                    vmapiLog.info({migrations: migrations},
+                        'Loaded data migrations modules successfully!');
+                }
+
+                dataMigrations = migrations;
+                next(migrationsLoadErr);
+            });
+        },
+
+        function initMoray(_, next) {
             assert.object(changefeedPublisher, 'changefeedPublisher');
 
             var morayConfig = jsprim.deepCopy(config.moray);
             morayConfig.changefeedPublisher = changefeedPublisher;
 
-            morayApi = new MORAY(morayConfig);
-            morayApi.connect();
-
-            morayApi.on('moray-ready', function onMorayReady() {
-                done();
+            var moraySetup = morayInit.startMorayInit({
+                morayConfig: morayConfig,
+                log: vmapiLog.child({ component: 'moray-init' }, true),
+                changefeedPublisher: changefeedPublisher
             });
+
+            morayBucketsInitializer = moraySetup.morayBucketsInitializer;
+            morayClient = moraySetup.morayClient;
+            moray = moraySetup.moray;
+
+            /*
+             * We don't set an 'error' event listener because we want the
+             * process to abort when there's a non-transient data migration
+             * error.
+             */
+            dataMigrationsCtrl = new DataMigrationsController({
+                log: vmapiLog.child({
+                    component: 'migrations-controller'
+                }, true),
+                migrations: dataMigrations,
+                moray: moray
+            });
+
+            /*
+             * We purposely start data migrations *only when all buckets are
+             * updated and reindexed*. Otherwise, if we we migrated records that
+             * have a value for a field for which a new index was just added,
+             * moray could discard that field when fetching the object using
+             * findObjects or getObject requests (See
+             * http://smartos.org/bugview/MORAY-104 and
+             * http://smartos.org/bugview/MORAY-428). We could thus migrate
+             * those records erroneously, and in the end write bogus data.
+             */
+            morayBucketsInitializer.on('done',
+                function onMorayBucketsInitialized() {
+                    dataMigrationsCtrl.start();
+                });
+
+            /*
+             * We don't want to wait for the Moray initialization process to be
+             * done before creating the HTTP server that will provide VMAPI's
+             * API endpoints, as:
+             *
+             * 1. some endpoints can function properly without using the Moray
+             *    storage layer.
+             *
+             * 2. some endpoints are needed to provide status information,
+             *    including status information about the storage layer.
+             */
+            next();
         },
-        function connectToWfApi(done) {
+        function connectToWfApi(_, next) {
             apiClients.wfapi.connect();
             /*
              * We intentionally don't need and want to wait for the Workflow API
@@ -174,7 +257,7 @@ function startVmapiService() {
              * up VMAPI. Individual request handlers will handle the Workflow
              * API client's connection status appropriately and differently.
              */
-            done();
+            next();
         }
     ]}, function dependenciesInitDone(err) {
         if (err) {
@@ -182,22 +265,32 @@ function startVmapiService() {
                 error: err
             }, 'failed to initialize VMAPI\'s dependencies');
 
-            morayApi.close();
+            if (changefeedPublisher) {
+                changefeedPublisher.stop();
+            }
+
+            if (morayClient) {
+                morayClient.close();
+            }
+
+            process.exitCode = 1;
         } else {
-            var vmapiService = new vmapi({
-                version: config.version,
+            var vmapiApp = new VmapiApp({
+                apiClients: apiClients,
+                changefeedPublisher: changefeedPublisher,
+                dataMigrationsCtrl: dataMigrationsCtrl,
                 log: vmapiLog.child({ component: 'http-api' }, true),
+                moray: moray,
+                morayBucketsInitializer: morayBucketsInitializer,
+                overlay: config.overlay,
+                reserveKvmStorage: config.reserveKvmStorage,
                 serverConfig: {
                     bindPort: config.api.port
                 },
-                apiClients: apiClients,
-                moray: morayApi,
-                changefeedPublisher: changefeedPublisher,
-                overlay: config.overlay,
-                reserveKvmStorage: config.reserveKvmStorage
+                version: config.version
             });
 
-            vmapiService.listen();
+            vmapiApp.listen();
         }
     });
 }

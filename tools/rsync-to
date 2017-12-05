@@ -6,21 +6,26 @@
 #
 
 #
-# Copyright (c) 2015, Joyent, Inc.
+# Copyright (c) 2017, Joyent, Inc.
 #
 
 #
 # Rsync the master in this working copy to the install on the given HN.
 #
 
-#set -o xtrace
+if [[ -n "$TRACE" ]]; then
+    export PS4='[\D{%FT%TZ}] ${BASH_SOURCE}:${LINENO}: ${FUNCNAME[0]:+${FUNCNAME[0]}(): }'
+    set -o xtrace
+fi
 set -o errexit
+set -o pipefail
+
 
 TOP=$(cd $(dirname $0)/../; pwd)
 NODE="root@$1"
 
 if [[ -z "$VMAPI_ZONE" ]]; then
-    VMAPI_ZONE=$(ssh $NODE "vmadm lookup -1 alias=vmapi0" 2>/dev/null)
+    VMAPI_ZONE=$(ssh $NODE "vmadm lookup -1 alias=~^vmapi" 2>/dev/null)
 fi
 echo "VMAPI_ZONE: $VMAPI_ZONE"
 
@@ -36,11 +41,16 @@ rsync -av ${TOP}/ \
     $NODE:/zones/$VMAPI_ZONE/root/opt/smartdc/vmapi/ \
     $extraOpts \
     --exclude .git/ \
+    --exclude /boot/ \
     --exclude /config.json \
     --exclude /deps/ \
     --exclude /doc/ \
     --exclude /tools/ \
     --exclude /tmp/
+
+rsync -av ${TOP}/boot/ \
+    $NODE:/zones/$VMAPI_ZONE/root/opt/smartdc/boot/ \
+    $extraOpts
 
 state=$(ssh ${NODE} svcs -z ${VMAPI_ZONE} -H -o state vmapi)
 if [[ "$state" == "maintenance" ]]; then

@@ -5,7 +5,7 @@
  */
 
 /*
- * Copyright 2017 Joyent, Inc.
+ * Copyright (c) 2017, Joyent, Inc.
  */
 
 // var test = require('tap').test;
@@ -16,6 +16,8 @@ var async = require('async');
 var util = require('util');
 
 var common = require('./common');
+var testUuid = require('./lib/uuid');
+var waitForValue = common.waitForValue;
 
 // --- Globals
 
@@ -36,10 +38,6 @@ var CALLER = {
     ip: '127.0.0.68',
     keyId: '/foo@joyent.com/keys/id_rsa'
 };
-
-// In seconds
-var TIMEOUT = 120;
-
 
 // --- Helpers
 
@@ -68,63 +66,6 @@ function checkJob(t, job) {
     t.ok(job.name, 'name');
     t.ok(job.execution, 'execution');
     t.ok(job.params, 'params');
-}
-
-
-function checkEqual(value, expected) {
-    if ((typeof (value) === 'object') && (typeof (expected) === 'object')) {
-        var exkeys = Object.keys(expected);
-        for (var i = 0; i < exkeys.length; i++) {
-            var key = exkeys[i];
-            if (value[key] !== expected[key])
-                return false;
-        }
-
-        return true;
-    } else {
-        return (value === expected);
-    }
-}
-
-
-function checkValue(url, key, value, callback) {
-    return client.get(url, function (err, req, res, body) {
-        if (err) {
-            return callback(err);
-        }
-
-        return callback(null, checkEqual(body[key], value));
-    });
-}
-
-
-var times = 0;
-
-function waitForValue(url, key, value, callback) {
-
-    function onReady(err, ready) {
-        if (err) {
-            callback(err);
-            return;
-        }
-
-        if (!ready) {
-            times++;
-
-            if (times === TIMEOUT) {
-                throw new Error('Timeout waiting on ' + url);
-            } else {
-                setTimeout(function () {
-                    waitForValue(url, key, value, callback);
-                }, 1000);
-            }
-        } else {
-            times = 0;
-            callback(null);
-        }
-    }
-
-    return checkValue(url, key, value, onReady);
 }
 
 
@@ -203,19 +144,24 @@ exports.setUp = function (callback) {
 };
 
 
-exports.find_headnode = function (t) {
-    client.cnapi.get('/servers', function (err, req, res, servers) {
+exports.find_server = function (t) {
+    client.cnapi.get({
+        path: '/servers',
+        query: {
+            headnode: true
+        }
+    }, function (err, req, res, servers) {
         common.ifError(t, err);
         t.equal(res.statusCode, 200, '200 OK');
         t.ok(servers, 'servers is set');
         t.ok(Array.isArray(servers), 'servers is Array');
         for (var i = 0; i < servers.length; i++) {
-            if (servers[i].headnode === true) {
+            if (servers[i].status === 'running') {
                 SERVER = servers[i];
                 break;
             }
         }
-        t.ok(SERVER, 'server found');
+        t.ok(SERVER, 'found a running headnode to use for test provisions');
         t.done();
     });
 };
@@ -606,18 +552,21 @@ exports.create_vm_tags_not_ok = function (t) {
     }
 
     function checkBadTritonTagType1(next) {
-        var msg = '"triton.cns.services" must be a string';
+        var msg = 'Triton tag "triton.cns.services" value must be a string: ' +
+            'true (boolean)';
         callVmapi({ 'triton.cns.services': true }, msg, next);
     }
 
     function checkBadTritonTagType2(next) {
-        var msg = '"triton.cns.disable" must be a boolean';
+        var msg = 'Triton tag "triton.cns.disable" value must be a boolean: ' +
+            '"true" (string)';
         callVmapi({ 'triton.cns.disable': 'true' }, msg, next);
     }
 
     function checkBadTritonDNS(next) {
-        var msg = '"_foo.bar" is not DNS safe';
-        callVmapi({ 'triton.cns.services': 'foo,_foo.bar' }, msg, next);
+        var msg = 'invalid "triton.cns.services" tag: Expected DNS name ' +
+            'but "$" found.';
+        callVmapi({ 'triton.cns.services': 'foo,$#foo.bar' }, msg, next);
     }
 
     async.series([
@@ -636,7 +585,7 @@ exports.create_vm = function (t) {
     };
 
     var vm = {
-        alias: 'vmapitest-full-' + uuid.create().split('-')[0],
+        alias: 'vmapitest-full-' + testUuid.generateShortUuid(),
         owner_uuid: CUSTOMER,
         image_uuid: IMAGE,
         server_uuid: SERVER.uuid,
@@ -696,7 +645,9 @@ exports.get_job = function (t) {
 
 
 exports.wait_provisioned_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -738,7 +689,9 @@ exports.stop_vm = function (t) {
 
 
 exports.wait_stopped_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -779,7 +732,9 @@ exports.start_vm = function (t) {
 
 
 exports.wait_started_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -819,7 +774,9 @@ exports.reboot_vm = function (t) {
 
 
 exports.wait_rebooted_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -876,7 +833,9 @@ exports.add_nics_with_networks = function (t) {
 
 
 exports.wait_add_nics_with_networks = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -933,7 +892,9 @@ exports.add_nics_with_macs = function (t) {
 
 
 exports.wait_add_nics_with_macs = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -995,7 +956,9 @@ exports.remove_nics = function (t) {
 
 
 exports.wait_remove_nics = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1093,9 +1056,12 @@ exports.change_with_bad_tags = function (t) {
     }
 
     var unrecognizedMsg = 'Unrecognized special triton tag "triton.foo"';
-    var stringMsg = '"triton.cns.services" must be a string';
-    var booleanMsg = '"triton.cns.disable" must be a boolean';
-    var dnsMsg = '"_foo.bar" is not DNS safe';
+    var stringMsg = 'Triton tag "triton.cns.services" value must be a ' +
+        'string: true (boolean)';
+    var booleanMsg = 'Triton tag "triton.cns.disable" value must be a ' +
+        'boolean: "true" (string)';
+    var dnsMsg = 'invalid "triton.cns.services" tag: Expected DNS name but ' +
+        '"_" found.';
     var dockerMsg1 = 'Special tag "docker:label:com.docker." not supported';
     var dockerMsg2 = 'Special tag "sdc_docker" not supported';
 
@@ -1225,7 +1191,9 @@ exports.add_tags = function (t) {
 
 
 exports.wait_new_tag_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1238,7 +1206,9 @@ exports.wait_new_tag = function (t) {
         group: 'deployment'
     };
 
-    waitForValue(vmLocation, 'tags', tags, function (err) {
+    waitForValue(vmLocation, 'tags', tags, {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1277,7 +1247,9 @@ exports.delete_tag = function (t) {
 
 
 exports.wait_delete_tag_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1289,7 +1261,9 @@ exports.wait_delete_tag = function (t) {
         group: 'deployment'
     };
 
-    waitForValue(vmLocation, 'tags', tags, function (err) {
+    waitForValue(vmLocation, 'tags', tags, {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1314,7 +1288,9 @@ exports.delete_tags = function (t) {
 
 
 exports.wait_delete_tags_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1322,7 +1298,9 @@ exports.wait_delete_tags_job = function (t) {
 
 
 exports.wait_delete_tags = function (t) {
-    waitForValue(vmLocation, 'tags', {}, function (err) {
+    waitForValue(vmLocation, 'tags', {}, {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1355,7 +1333,9 @@ exports.set_tags = function (t) {
 
 
 exports.wait_set_tags_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1371,7 +1351,9 @@ exports.wait_set_tags = function (t) {
         withequals: 'foo=bar'
     };
 
-    waitForValue(vmLocation, 'tags', tags, function (err) {
+    waitForValue(vmLocation, 'tags', tags, {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1399,7 +1381,9 @@ exports.snapshot_vm = function (t) {
 
 
 exports.wait_snapshot_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1427,7 +1411,9 @@ exports.rollback_vm = function (t) {
 
 
 exports.wait_rollback_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1455,7 +1441,9 @@ exports.delete_snapshot = function (t) {
 
 
 exports.wait_delete_snapshot_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1483,7 +1471,9 @@ exports.reprovision_vm = function (t) {
 
 
 exports.wait_reprovision_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1506,7 +1496,9 @@ exports.destroy_vm = function (t) {
 
 
 exports.wait_destroyed_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1610,7 +1602,9 @@ exports.get_nonautoboot_job = function (t) {
 
 
 exports.wait_nonautoboot_provisioned_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1636,7 +1630,9 @@ exports.change_autoboot = function (t) {
 
 
 exports.wait_autoboot_update_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1674,7 +1670,9 @@ exports.destroy_nonautoboot_vm = function (t) {
 
 
 exports.wait_nonautoboot_destroyed_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1708,7 +1706,9 @@ exports.create_vm_with_package = function (t) {
 
 
 exports.wait_provisioned_with_package_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1797,7 +1797,9 @@ exports.resize_package = function (t) {
 
 
 exports.wait_resize_package_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1836,7 +1838,9 @@ exports.resize_package_down = function (t) {
 
 
 exports.wait_resize_package_job_2 = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1859,7 +1863,9 @@ exports.destroy_vm_with_package = function (t) {
 
 
 exports.wait_destroyed_with_package_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -1897,7 +1903,9 @@ exports.provision_network_names = function (t) {
 
 
 exports.wait_provision_network_names = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
@@ -2032,7 +2040,9 @@ exports.create_docker_vm = function (t) {
 
 
 exports.wait_provisioned_docker_job = function (t) {
-    waitForValue(jobLocation, 'execution', 'succeeded', function (err) {
+    waitForValue(jobLocation, 'execution', 'succeeded', {
+        client: client
+    }, function (err) {
         common.ifError(t, err);
         t.done();
     });
