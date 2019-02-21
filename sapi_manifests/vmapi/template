@@ -27,6 +27,12 @@
         "enabled": false
 {{/fabric_cfg}}
     },
+{{#zfs_send_mbps_limit}}
+    "zfs_send_mbps_limit": 500,
+{{/zfs_send_mbps_limit}}
+{{#max_running_migrations_per_cn}}
+    "max_running_migrations_per_cn": 500,
+{{/max_running_migrations_per_cn}}
     "wfapi": {
         "forceMd5Check": true,
         "workflows": [
